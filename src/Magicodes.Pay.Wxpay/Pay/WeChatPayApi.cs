@@ -17,6 +17,7 @@
 
 using System;
 using System.IO;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading.Tasks;
@@ -590,6 +591,71 @@ namespace Magicodes.Pay.Wxpay.Pay
             WeChatPayHelper.LoggerAction("Debug", "请求结果：" + httpResult);
             var token =JsonConvert.DeserializeObject<AccessToken>(httpResult);
             return token.openid;
+        }
+
+        #endregion
+
+        #region 客户端jsapi
+        private string GetTicker() {
+            var config = GetConfig();
+            // 判断是否过期
+            if (ClientTicker.Ticket.TicketStart.AddSeconds(ClientTicker.Ticket.expires_in) < DateTime.Now)
+            {
+                // Token是否过期
+                if (ClientTicker.Token.TokenStart.AddSeconds(ClientTicker.Token.expires_in) < DateTime.Now)
+                {
+                    string url = $"https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid={config.PayAppId}&secret={config.AppSecret}";
+                    var httpResult = RequestUtility.HttpGet(url, Encoding.UTF8);
+                    WeChatPayHelper.LoggerAction("Debug", "获取ClientToken请求结果：" + httpResult);
+                    var token = JsonConvert.DeserializeObject<CToken>(httpResult);
+                    if (token != null)
+                    {
+                        token.TokenStart = DateTime.Now;
+                        ClientTicker.Token = token;
+                    } else
+                    {
+                        WeChatPayHelper.LoggerAction("Error", "获取ClientToken，获取Token失败！");
+                        return null;
+                    }
+                }
+                string turl = $"https://api.weixin.qq.com/cgi-bin/ticket/getticket?access_token={ClientTicker.Token.access_token}&type=jsapi";
+                var httpResult1 = RequestUtility.HttpGet(turl, Encoding.UTF8);
+                WeChatPayHelper.LoggerAction("Debug", "获取ClientTicket请求结果：" + httpResult1);
+                var ticket = JsonConvert.DeserializeObject<CTicket>(httpResult1);
+                if (ticket != null)
+                {
+                    ticket.TicketStart = DateTime.Now;
+                    ClientTicker.Ticket = ticket;
+                } else
+                {
+                    WeChatPayHelper.LoggerAction("Error", "获取ClientTicker，获取Ticker失败！");
+                    return null;
+                }
+
+            }
+            return ClientTicker.Ticket.ticket;
+        }
+
+        public JsApiSign GetJsApiConfig(string url)
+        {
+            var config = GetConfig();
+            var jsapi_ticket = GetTicker();
+            if (jsapi_ticket == null) return null;
+            var param = new JsApiSign()
+            {
+                timestamp = _weChatPayHelper.GetTimestamp(),
+                noncestr = _weChatPayHelper.GetNoncestr(),
+                url = url
+            };
+            var signstr = $"jsapi_ticket={jsapi_ticket}&noncestr={param.noncestr}&timestamp={param.timestamp}&url={param.url}";
+            
+            using (SHA1Managed sha1 = new SHA1Managed())
+            {
+                var hash = sha1.ComputeHash(Encoding.ASCII.GetBytes(signstr));
+
+                param.sign = BitConverter.ToString(hash).Replace("-", "").ToLower();
+            }
+            return param;
         }
         #endregion
     }
